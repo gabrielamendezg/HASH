@@ -76,29 +76,21 @@ bool hash_redimensionar(hash_t* hash,size_t nuevo_tam){
 	size_t tam_anterior = hash->tam;
 	lista_t** tabla_nueva = malloc(nuevo_tam*sizeof(lista_t*));
 	if(tabla_nueva == NULL) return false;
-	for(size_t i = 0;i<nuevo_tam;i++){
-		tabla_nueva[i]=lista_crear();
-		if(tabla_nueva[i]==NULL){
-			for(size_t j=0;j<i;j++){
-				lista_destruir(tabla_nueva[j],NULL);
-				free(tabla_nueva);
-			}
-			return false;
-		}
-	}
 	hash->tabla = tabla_nueva;
+	for(size_t i = 0; i<nuevo_tam;i++){
+		hash->tabla[i]=NULL;
+	}
 	hash->cant = 0;
 	hash->cap = nuevo_tam*FACTOR_CAP;
 	hash->tam = nuevo_tam;
 	for(size_t i = 0;i<tam_anterior; i++){
-		if(tabla_anterior[i]!=NULL){
-			while(!lista_esta_vacia(tabla_anterior[i])){
-				hash_campo_t* campo = lista_borrar_primero(tabla_anterior[i]);
-				hash_guardar(hash,campo->clave,campo->dato);
-				hash_campo_destruir(campo,NULL);
-			}
-			lista_destruir(tabla_anterior[i],NULL);
+		if(tabla_anterior[i]==NULL)continue;
+		while(!lista_esta_vacia(tabla_anterior[i])){
+			hash_campo_t* campo = lista_borrar_primero(tabla_anterior[i]);
+			hash_guardar(hash,campo->clave,campo->dato);
+			hash_campo_destruir(campo,NULL);
 		}
+		lista_destruir(tabla_anterior[i],NULL);
 	}
 	free(tabla_anterior);
 	return true;
@@ -108,13 +100,11 @@ bool hash_redimensionar(hash_t* hash,size_t nuevo_tam){
 //Caso contrario devuelve NULL.
 lista_iter_t* lista_buscar_iter_clave(const hash_t* hash, const char* clave){
 	size_t pos = f_hashing(hash->tam,clave);
-	if(lista_esta_vacia(hash->tabla[pos])) return NULL;
+	if(hash->tabla[pos]==NULL||lista_esta_vacia(hash->tabla[pos])) return NULL;
 	lista_iter_t* iter = lista_iter_crear(hash->tabla[pos]);
 	while(!lista_iter_al_final(iter)){
 		hash_campo_t* campo = lista_iter_ver_actual(iter);
-		if(strcmp(campo->clave,clave)==0){
-			return iter;
-		}
+		if(strcmp(campo->clave,clave)==0)return iter;
 		lista_iter_avanzar(iter);
 	}
 	lista_iter_destruir(iter);
@@ -134,8 +124,7 @@ hash_t* hash_crear(hash_destruir_dato_t destruir_dato){
 		return NULL;
 	}
 	for(size_t i = 0; i<TAM_INICIAL;i++){
-		hash->tabla[i]=lista_crear();
-		if(hash->tabla[i] == NULL) hash_destruir(hash);
+		hash->tabla[i]=NULL;
 	}
 	hash->destruir_dato = destruir_dato;
 	return hash;
@@ -143,25 +132,30 @@ hash_t* hash_crear(hash_destruir_dato_t destruir_dato){
 
 //Guarda un elemento en el hash según su clave.
 bool hash_guardar(hash_t *hash, const char *clave, void *dato){
-	size_t pos = f_hashing(hash->tam,clave);
-	bool guardado = false;
+	if(hash->cant+1>=hash->cap){
+		if(!hash_redimensionar(hash,hash->tam*FACTOR_REDIM)) return false;
+	}
 	lista_iter_t* iter = lista_buscar_iter_clave(hash,clave);
 	if(iter!=NULL){
 		hash_campo_t* campo = lista_iter_ver_actual(iter);
 		lista_iter_destruir(iter);
 		if(hash->destruir_dato!=NULL) hash->destruir_dato(campo->dato);
 		campo->dato=dato;
-		guardado = true;
+		return true;
 	}else{
+		size_t pos = f_hashing(hash->tam,clave);
+		if(hash->tabla[pos]==NULL){
+			hash->tabla[pos]=lista_crear();
+			if(hash->tabla[pos]==NULL) return false;
+		}
 		hash_campo_t* nuevo_campo = hash_campo_crear(clave,dato);
 		if(nuevo_campo==NULL)return false;
-		guardado = lista_insertar_primero(hash->tabla[pos],nuevo_campo);
-		hash->cant+=1;
+		if(lista_insertar_primero(hash->tabla[pos],nuevo_campo)){
+			hash->cant+=1;
+			return true;
+		}
 	}
-	if(guardado&&hash->cant>=hash->cap){
-		hash_redimensionar(hash,hash->tam*FACTOR_REDIM);
-	}
-	return guardado;
+	return false;
 }
 
 //borra un elemento
@@ -194,12 +188,10 @@ void *hash_obtener(const hash_t *hash, const char *clave){
 //Devuelve si una clave está o no en el hash. 
 bool hash_pertenece(const hash_t *hash, const char *clave){
 	lista_iter_t* iter = lista_buscar_iter_clave(hash,clave);
-	if(iter==NULL) {
-		lista_iter_destruir(iter);
-		return false;
-	}
+	bool ok = true;
+	if(iter==NULL) ok = false;
 	lista_iter_destruir(iter);
-	return true;
+	return ok;
 }
 
 //Obtiene la cantidad de elementos en el hash.
@@ -210,6 +202,7 @@ size_t hash_cantidad(const hash_t *hash){
 //Destruye el hash. 
 void hash_destruir(hash_t *hash){
 	for(size_t i = 0;i<hash->tam;i++){
+		if(hash->tabla[i]==NULL) continue;
 		while(!lista_esta_vacia(hash->tabla[i])){
 			hash_campo_t* campo = lista_borrar_primero(hash->tabla[i]);
 			hash_campo_destruir(campo,hash->destruir_dato);
@@ -236,14 +229,14 @@ hash_iter_t* hash_iter_crear(const hash_t* hash){
 	if(iter==NULL) return NULL;
 	iter->pos_hash = 0;
 	iter->hash = hash;
-	while(iter->pos_hash < iter->hash->tam){
-		if(lista_esta_vacia(iter->hash->tabla[iter->pos_hash])){
+	while(iter->pos_hash < hash->tam){
+		if(hash->tabla[iter->pos_hash]==NULL||lista_esta_vacia(hash->tabla[iter->pos_hash])){
 			iter->pos_hash+=1;
 		}else{
 			break;
 		}
 	}
-	if(iter->pos_hash<iter->hash->tam){
+	if(iter->pos_hash<hash->tam){
 		iter->pos_lista=lista_iter_crear(iter->hash->tabla[iter->pos_hash]);
 	}else{
 		iter->pos_lista = NULL;
@@ -255,21 +248,19 @@ hash_iter_t* hash_iter_crear(const hash_t* hash){
 bool hash_iter_avanzar(hash_iter_t* iter){
 	if(hash_iter_al_final(iter))return false;
 	lista_iter_avanzar(iter->pos_lista);
-	if(lista_iter_al_final(iter->pos_lista)){
-		lista_iter_destruir(iter->pos_lista);
-		iter->pos_lista=NULL;
-		iter->pos_hash+=1;
-		while(!hash_iter_al_final(iter)){
-			if(lista_esta_vacia(iter->hash->tabla[iter->pos_hash])){
-				iter->pos_hash+=1;
-			}else{
-				iter->pos_lista=lista_iter_crear(iter->hash->tabla[iter->pos_hash]);
-				return true;
-			}
+	if(!lista_iter_al_final(iter->pos_lista)) return true;
+	lista_iter_destruir(iter->pos_lista);
+	iter->pos_lista=NULL;
+	iter->pos_hash+=1;
+	while(!hash_iter_al_final(iter)){
+		if(iter->hash->tabla[iter->pos_hash]==NULL||lista_esta_vacia(iter->hash->tabla[iter->pos_hash])){
+			iter->pos_hash+=1;
+		}else{
+			iter->pos_lista=lista_iter_crear(iter->hash->tabla[iter->pos_hash]);
+			return true;
 		}
-		return false;
 	}
-	return true;
+	return false;
 }
 
 //Devuelve clave actual
